@@ -138,7 +138,7 @@ class PythonController extends CustomController {
     val groupId = ScriptSQLExec.context().groupId
     var jobInfo = JobManager.getJobInfo(
       params("owner"), params.getOrElse("jobType", MLSQLJobType.SCRIPT), params("jobName"), params("sql"),
-      params.getOrElse("timeout", "-1").toLong
+      params.getOrElse("timeout", "-1").toLong, params.getOrElse("jobId",""), params.getOrElse("transId","")
     )
     jobInfo = jobInfo.copy(groupId = groupId)
     var res: String = ""

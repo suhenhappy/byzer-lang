@@ -36,7 +36,10 @@ import tech.mlsql.runtime.MLSQLPlatformLifecycle
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
+import org.apache.commons.dbcp2.BasicDataSource
+import javax.sql.DataSource
 
+import scala.collection.mutable
 /**
  * 4/27/16 WilliamZhu(allwefantasy@gmail.com)
  */
@@ -99,6 +102,21 @@ class PlatformManager extends Logging{
 
     val params = config.get()
 
+    //获取日志库信息
+    val jdbcUrl = params.getParam("spark.job.mysql.url")
+    val user = params.getParam("spark.job.mysql.user")
+    val pass = params.getParam("spark.job.mysql.password")
+    val ds = new BasicDataSource()
+    ds.setUrl(jdbcUrl)
+    ds.setDriverClassName("com.mysql.jdbc.Driver")
+    ds.setUsername(user)
+    ds.setPassword(pass)
+    PlatformManager.datasource = ds
+    //设置plugin配置信息
+    params.getParamsMap.asScala.filter(f => f._1.startsWith("plugin.")).foreach { f => {
+      val key = f._1.substring(7,f._1.length)
+      PlatformManager.pluginMapping.put(key, f._2)
+    } }
     val lastStreamingRuntimeInfo = if (reRun) {
       val tempRuntime = PlatformManager.getRuntime
       tempRuntime.getClass.getMethod("clearLastInstantiatedContext").invoke(null)
@@ -198,6 +216,9 @@ object PlatformManager {
   private val INSTANTIATION_LOCK = new Object()
   //SparkRuntime.RUNTIME_IS_READY.compareAndSet(false, true)
   val RUNTIME_IS_READY = new AtomicBoolean(false)
+
+  var datasource: DataSource = null
+  var pluginMapping = mutable.Map[String, String]()
 
   /**
    * Reference to the last created SQLContext.

@@ -65,7 +65,7 @@ class RunScriptExecutor(_params: Map[String, String]) extends Logging with WowLo
     try {
       val jobInfo = JobManager.getJobInfo(
         param("owner"), param("jobType", MLSQLJobType.SCRIPT), param("jobName"), param("sql"),
-        paramAsLong("timeout", -1L)
+        paramAsLong("timeout", -1L),  param("jobId",""), param("transId","")
       )
       val context = createScriptSQLExecListener(sparkSession, jobInfo.groupId)
 
@@ -84,7 +84,7 @@ class RunScriptExecutor(_params: Map[String, String]) extends Logging with WowLo
           None
       }
     } finally {
-      if(this._autoClean){
+      if (this._autoClean) {
         RequestCleanerManager.call()
         cleanActiveSessionInSpark
       }
@@ -99,7 +99,7 @@ class RunScriptExecutor(_params: Map[String, String]) extends Logging with WowLo
     try {
       val jobInfo = JobManager.getJobInfo(
         param("owner"), param("jobType", MLSQLJobType.SCRIPT), param("jobName"), param("sql"),
-        paramAsLong("timeout", -1L)
+        paramAsLong("timeout", -1L), param("jobId",""), param("transId","")
       )
       val context = createScriptSQLExecListener(sparkSession, jobInfo.groupId)
 
@@ -242,7 +242,7 @@ class RunScriptExecutor(_params: Map[String, String]) extends Logging with WowLo
         if (context.env().getOrElse(MLSQLEnvKey.CONTEXT_SYSTEM_TABLE, "false").toBoolean) {
           result.append("[" + WowJsonInferSchema.toJson(df).mkString(",") + "]")
         } else {
-          val outputSize = paramAsInt("outputSize", 5000)
+          val outputSize = paramAsInt("outputSize", 100000)
           val jsonDF = limitOrNot {
             sparkSession.sql(s"select * from $table limit " + outputSize)
           }.toJSON

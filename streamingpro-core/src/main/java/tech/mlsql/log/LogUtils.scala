@@ -55,6 +55,6 @@ object LogUtils {
       cause = cause.getCause
       buffer += "caused by：\n" + format_throwable(cause, skipPrefix)
     }
-
+    format(buffer.toString())
   }
 }

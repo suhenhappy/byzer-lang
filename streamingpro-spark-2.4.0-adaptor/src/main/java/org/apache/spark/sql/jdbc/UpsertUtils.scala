@@ -29,6 +29,8 @@ import org.apache.spark.sql.types._
 import org.apache.spark.sql.{DataFrame, Row}
 
 import scala.util.control.NonFatal
+import org.apache.spark.sql.jdbc.MysqlUpsertBuilder.log
+import org.apache.spark.sql.jdbc.PostgreSqlUpsertBuilder.log
 
 object UpsertUtils extends Logging {
 
@@ -190,7 +192,7 @@ trait UpsertBuilder {
 case class UpsertInfo(stmt: PreparedStatement, schema: StructType)
 
 object UpsertBuilder {
-  val b = Map("mysql" -> MysqlUpsertBuilder)
+  val b = Map("mysql" -> MysqlUpsertBuilder,"postgresql" -> PostgreSqlUpsertBuilder,"oracle" -> OracleUpsertBuilder)
 
   def forDriver(driver: String): UpsertBuilder = {
     val builder = b.filterKeys(k => driver.toLowerCase().contains(k.toLowerCase()))
@@ -276,6 +278,52 @@ object OracleUpsertBuilder extends UpsertBuilder with Logging {
       case None =>
         // Revert back to insert
         UpsertInfo(conn.prepareStatement(JdbcUtils.getInsertStatement(table, schema, None, isCaseSensitive, dialect)), schema)
+    }
+  }
+
+
+
+  //pg库upsert适配
+  object PostgreSqlUpsertBuilder extends UpsertBuilder with Logging{
+    def upsertStatement(conn: Connection, table: String, dialect: JdbcDialect, idField: Option[Seq[StructField]], schema: StructType, isCaseSensitive: Boolean): UpsertInfo = {
+      idField match {
+        case Some(id) => {
+          val columns = schema.fields.map(f => dialect.quoteIdentifier(f.name)).mkString(",")
+          val placeholders = schema.fields.map(_ => "?").mkString(",")
+          val updateSchema = StructType(schema.fields.filterNot(k => id.map(f => f.name).toSet.contains(k.name)))
+          val updateIdSchema = StructType(schema.fields.filter(k => id.map(f => f.name).toSet.contains(k.name)))
+          val updateIdColumns = updateIdSchema.fields.map(f => dialect.quoteIdentifier(f.name)).mkString(",")
+
+          val updateIdPlaceholders = updateIdSchema.fields.map(_ => "?").mkString(",")
+          val updateColumns = updateSchema.fields.map(f => dialect.quoteIdentifier(f.name)).mkString(",")
+          val updatePlaceholders = updateSchema.fields.map(_ => "?").mkString(",")
+          val updateFields = updateColumns.split(",").zip(updatePlaceholders.split(",")).map(f => s"${f._1} = ${f._2}").mkString(",")
+
+          val sql =
+            s"""with upsert as(
+          update
+            ${table}
+            set
+            $updateFields
+          where
+               |$updateIdColumns = $updateIdPlaceholders returning * ) insert into ${table} select $placeholders where not exists( select
+        1
+        from
+        upsert
+        where
+        $updateIdColumns = $updateIdPlaceholders
+        );""".stripMargin
+
+          log.info(s"Using sql $sql")
+
+          val schemaFields = updateSchema.fields ++ updateIdSchema.fields ++  schema.fields ++ updateIdSchema.fields
+          val upsertSchema = StructType(schemaFields)
+          UpsertInfo(conn.prepareStatement(sql), upsertSchema)
+        }
+        case None => {
+          UpsertInfo(conn.prepareStatement(JdbcUtils.getInsertStatement(table, schema, None, isCaseSensitive, dialect)), schema)
+        }
+      }
     }
   }
 }

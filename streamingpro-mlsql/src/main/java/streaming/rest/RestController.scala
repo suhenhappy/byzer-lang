@@ -52,6 +52,12 @@ import tech.mlsql.runtime.plugins.result_render.ResultRenderManager
 import scala.collection.JavaConversions._
 import scala.collection.mutable.ArrayBuffer
 import scala.util.control.NonFatal
+import java.net.NetworkInterface
+
+import org.apache.spark.sql.MLSQLUtils.{JobExecuteInfo, getAppStatusStore}
+import org.apache.spark.util.CurrentHostIPUtils
+import tech.mlsql.common.utils.log.Logging
+import tech.mlsql.log.LogUtils
 
 /**
  * Created by allwefantasy on 28/3/2017.
@@ -113,7 +119,12 @@ class RestController extends ApplicationController with WowLog with Logging {
     new Parameter(name = "skipGrammarValidate", required = false, description = "validate mlsql grammar. default: true", `type` = "boolean", allowEmptyValue = false),
     new Parameter(name = "includeSchema", required = false, description = "the return value should contains schema info. default: false", `type` = "boolean", allowEmptyValue = false),
     new Parameter(name = "fetchType", required = false, description = "take/collect. default: collect", `type` = "string", allowEmptyValue = false),
-    new Parameter(name = "enableQueryWithIndexer", required = false, description = "try query with indexer to speed. default: false", `type` = "boolean", allowEmptyValue = false)
+    new Parameter(name = "enableQueryWithIndexer", required = false, description = "try query with indexer to speed. default: false", `type` = "boolean", allowEmptyValue = false),
+    new Parameter(name = "enableQueryWithIndexer", required = false, description = "try query with indexer to speed. default: false", `type` = "boolean", allowEmptyValue = false),
+    new Parameter(name = "transId", required = false, description = "give the job you submit a id. uuid is ok.", `type` = "string", allowEmptyValue = false),
+    new Parameter(name = "jobId", required = false, description = "give the trans you submit a id. uuid is ok.", `type` = "string", allowEmptyValue = false),
+    new Parameter(name = "onlySchema", required = false, description = "If set true, only return table schema with query data. default: false", `type` = "boolean", allowEmptyValue = false)
+
   ))
   @Responses(Array(
     new ApiResponse(responseCode = "200", description = "", content = new Content(mediaType = "application/json",
@@ -138,16 +149,21 @@ class RestController extends ApplicationController with WowLog with Logging {
     }
     val includeSchema = param("includeSchema", "false").toBoolean
     var outputResult: String = if (includeSchema) "{}" else "[]"
+    var jobId: String = ""
+    var transId: String = ""
     try {
       val jobInfo = JobManager.getJobInfo(
         param("owner"), param("jobType", MLSQLJobType.SCRIPT), param("jobName"), param("sql"),
-        paramAsLong("timeout", -1L)
+        paramAsLong("timeout", -1L), param("jobId", ""), param("transId", "")
       )
+      jobId = jobInfo.groupId
+      transId = jobInfo.transId
       val context = createScriptSQLExecListener(sparkSession, jobInfo.groupId)
 
       def query = {
         if (paramAsBoolean("async", false)) {
           JobManager.asyncRun(sparkSession, jobInfo, () => {
+            var tasksString: String = null
             val urlString = param("callback")
             val callbackHeaderString = param("callbackHeader")
             var callbackHeader = Map[String,String]()
@@ -164,11 +180,12 @@ class RestController extends ApplicationController with WowLog with Logging {
                 skipGrammarValidate = paramAsBoolean("skipGrammarValidate", true))
 
               outputResult = getScriptResult(context, sparkSession)
-
+              tasksString = MLSQLUtils.getJobTasks(sparkSession, jobInfo.groupId)
               executeWithRetrying[HttpResponse](maxTries)(
                 RestUtils.httpClientPost(urlString,
                   Map("stat" -> s"""succeeded""",
                     "res" -> outputResult,
+                    "tasksString" -> tasksString,
                     "jobInfo" -> JSONTool.toJsonStr(jobInfo)),
                   callbackHeader),
                 HttpStatus.SC_OK == _.getStatusLine.getStatusCode,
@@ -180,12 +197,17 @@ class RestController extends ApplicationController with WowLog with Logging {
                 e.printStackTrace()
 
                 val msg = ExceptionRenderManager.call(e).str.getOrElse( e.getMessage )
-
+                val msgBuffer = ArrayBuffer[String]()
+                if (paramAsBoolean("show_stack", false)) {
+                    logger.error(format_full_exception(msgBuffer, e))
+                }
+                tasksString = MLSQLUtils.getJobTasks(sparkSession, jobInfo.groupId)
                 executeWithRetrying[HttpResponse](maxTries)(
                   RestUtils.httpClientPost(urlString,
                     Map("stat" -> s"""failed""",
                       "msg" -> msg ,
-                      "jobInfo" -> JSONTool.toJsonStr(jobInfo)),
+                      "jobInfo" -> JSONTool.toJsonStr(jobInfo),
+                      "tasksString" -> tasksString),
                     callbackHeader),
                   HttpStatus.SC_OK == _.getStatusLine.getStatusCode,
                   response => logger.error(s"Fail SQL callback request failed after ${maxTries} attempts, " +
@@ -231,11 +253,13 @@ class RestController extends ApplicationController with WowLog with Logging {
             case None => throw new RuntimeException(s"no executeMode named ${executeMode}")
           }
       }
-
+      JobManager.successStatus(jobId, transId)
     } catch {
       case e: Exception =>
+        JobManager.errorStatus(jobId, transId)
         logError("An error occurred while the job manager was executing the task, ", e)
         val msg = ExceptionRenderManager.call(e).str.getOrElse(e.getMessage)
+        logInfo(LogUtils.format(msg))
         render(500, msg)
     } finally {
       RequestCleanerManager.call()
@@ -243,6 +267,20 @@ class RestController extends ApplicationController with WowLog with Logging {
     }
     render(outputResult)
   }
+
+  private def getLogUIUrl(jobId: String): String = {
+    val sparkSession = getSession
+    accessAuth(sparkSession)
+    val runMode = MLSQLUtils.getConfiguration(sparkSession, "spark.master")
+    if (runMode.equals("yarn")) {
+      val url = MLSQLUtils.getConfiguration(sparkSession, "spark.org.apache.hadoop.yarn.server.webproxy.amfilter.AmIpFilter.param.PROXY_URI_BASES")
+      url + "/jobs/job/?id=" + jobId
+    } else {
+      val ipAddress = CurrentHostIPUtils.getIpAddress
+      "http://" + ipAddress + ":4040/jobs/job/?id=" + jobId
+    }
+  }
+
 
   private def accessAuth(sparkSession: SparkSession) = {
     val accessToken = sparkSession.conf.get("spark.mlsql.auth.access_token", "")
@@ -266,6 +304,7 @@ class RestController extends ApplicationController with WowLog with Logging {
   private def getScriptResult(context: ScriptSQLExecListener, sparkSession: SparkSession): String = {
     val result = new StringBuffer()
     val includeSchema = param("includeSchema", "false").toBoolean
+    val onlySchema = param("onlySchema", "false").toBoolean
     val fetchType = param("fetchType", "collect")
     if (includeSchema) {
       result.append("{")
@@ -278,8 +317,24 @@ class RestController extends ApplicationController with WowLog with Logging {
         if (includeSchema) {
           result.append(s""" "schema":${df.schema.json},"data": """)
         }
-
-        if (context.env().getOrElse(MLSQLEnvKey.CONTEXT_SYSTEM_TABLE, "false").toBoolean) {
+        if (!onlySchema) {
+          if (context.env().getOrElse(MLSQLEnvKey.CONTEXT_SYSTEM_TABLE, "false").toBoolean) {
+            result.append("[" + WowJsonInferSchema.toJson(df).mkString(",") + "]")
+          } else {
+            val outputSize = paramAsInt("outputSize", 100000)
+            val jsonDF = limitOrNot {
+              sparkSession.sql(s"select * from $table limit " + outputSize)
+            }.toJSON
+            val scriptJsonStringResult = fetchType match {
+              case "collect" => jsonDF.collect().mkString(",")
+              case "take" => sparkSession.table(table).toJSON.take(outputSize).mkString(",")
+            }
+            result.append("[" + scriptJsonStringResult + "]")
+          }
+        } else {
+          result.append("[]")
+        }
+        /*if (context.env().getOrElse(MLSQLEnvKey.CONTEXT_SYSTEM_TABLE, "false").toBoolean) {
           result.append("[" + WowJsonInferSchema.toJson(df).mkString(",") + "]")
         } else {
           val outputSize = paramAsInt("outputSize", 5000)
@@ -291,7 +346,7 @@ class RestController extends ApplicationController with WowLog with Logging {
             case "take" => df.toJSON.take(outputSize).mkString(",")
           }
           result.append("[" + scriptJsonStringResult + "]")
-        }
+        }*/
       case None =>
         if (!includeSchema) {
           result.append("[]")
@@ -427,6 +482,42 @@ class RestController extends ApplicationController with WowLog with Logging {
     ScriptSQLExec.unset
     SparkSession.clearActiveSession()
   }
+
+  @Action(
+    summary = "get Subtasks By JobId", description = ""
+  )
+  @Parameters(Array(
+    new Parameter(name = "groupId", required = false, description = "the job id", `type` = "string", allowEmptyValue = false)
+  ))
+  @Responses(Array(
+    new ApiResponse(responseCode = "200", description = "", content = new Content(mediaType = "application/json",
+      schema = new Schema(`type` = "string", format = """{}""", description = "")
+    ))
+  ))
+  @At(path = Array("/getSubtasksByJobId"), types = Array(GET, POST))
+  def getSubtasksByJobId = {
+    val session = getSession
+    val groupId = param("groupId")
+    render(200, MLSQLUtils.getJobGroup(session, groupId))
+  }
+
+  @Action(
+    summary = "get Jump to sparkLog url", description = ""
+  )
+  @Parameters(Array(
+    new Parameter(name = "jobId", required = false, description = "the job id", `type` = "string", allowEmptyValue = false)
+  ))
+  @Responses(Array(
+    new ApiResponse(responseCode = "200", description = "", content = new Content(mediaType = "application/json",
+      schema = new Schema(`type` = "string", format = """{}""", description = "")
+    ))
+  ))
+  @At(path = Array("/getJumpLogUrl"), types = Array(GET, POST))
+  def getJumpLogUr: Unit = {
+    val jobId = param("jobId")
+    render(200, getLogUIUrl(jobId.toString))
+  }
+
 
   @Action(
     summary = "kill specific job", description = ""

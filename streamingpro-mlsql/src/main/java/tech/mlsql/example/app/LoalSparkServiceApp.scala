@@ -17,7 +17,12 @@ object LocalSparkServiceApp {
       "-streaming.spark.service", "true",
       "-streaming.job.cancel", "true",
       "-streaming.datalake.path", "./data/",
-      "-streaming.driver.port", "9003"
+      "-streaming.driver.port", "9003",
+      "-spark.hadoop.mapreduce.job.run-local", "true",
+      "-streaming.udf.clzznames com.code.udf.MyFunctions","true",
+      "-plugin.Peer com.code.mlsql.peers.Peer",
+      "-plugin.GPStorage com.code.mlsql.distrdb.GreenplumStorage",
+      "-plugin.ChartsPlugin", "com.code.mlsql.charts.ChartsPlugin"
     ) ++ args )
   }
 }

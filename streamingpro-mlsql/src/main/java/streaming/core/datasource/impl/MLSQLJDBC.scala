@@ -32,6 +32,9 @@ import tech.mlsql.common.utils.lang.sc.ScalaReflect
 import tech.mlsql.common.utils.hdfs.DistrLocker
 import tech.mlsql.common.utils.log.Logging
 import tech.mlsql.tool.HDFSOperatorV2
+import org.apache.spark.sql.catalyst.util.CaseInsensitiveMap
+import org.apache.spark.sql.execution.datasources.jdbc.{JDBCOptions, JdbcHelper, ReflectHelper}
+import tech.mlsql.common.utils.hdfs.{DistrLocker, HDFSOperator}
 
 class MLSQLJDBC(override val uid: String) extends MLSQLSource with MLSQLSink with MLSQLSourceInfo with MLSQLRegistry with WowParams with Logging with WowLog {
   def this() = this(BaseParams.randomUID())
@@ -66,6 +69,19 @@ class MLSQLJDBC(override val uid: String) extends MLSQLSource with MLSQLSink wit
     reader.options(config.config)
     assert(url.isDefined, s"url could not be null!")
     assert(driver.isDefined, s"driver could not be null!")
+
+    var newReader: DataFrameReader = reader
+    var isAdaptor: Boolean = false
+    val readerOptions: CaseInsensitiveMap[String] = ReflectHelper.reflectValue(reader, "extraOptions")
+    val jdbcOptions = readerOptions.toMap
+    if ("true".equals(jdbcOptions.getOrElse(JdbcHelper.SUPPORT_JDBC_MULTI_VERSION, "false"))) {
+      val ss: SparkSession = ReflectHelper.reflectValue(reader, "sparkSession")
+      val readerAdaptor = DataFrameReaderFactory.create(ss)
+      readerAdaptor.options(readerOptions.toMap)
+      newReader = readerAdaptor
+      isAdaptor = true
+    }
+
     if (JdbcUtils.isMySqlDriver(driver.get)) {
       /**
        * Fetch Size It's a value for JDBC PreparedStatement.
@@ -73,10 +89,10 @@ class MLSQLJDBC(override val uid: String) extends MLSQLSource with MLSQLSink wit
        */
       MLSQLSparkConst.majorVersion(SparkCoreVersion.exactVersion) match {
         case 1 | 2 =>
-          reader.options(Map("fetchsize" -> "1000"))
+          newReader.options(Map("fetchsize" -> "1000"))
           url = url.map(x => if (x.contains("useCursorFetch")) x else s"$x&useCursorFetch=true")
         case _ =>
-          reader.options(Map("fetchsize" -> s"${Integer.MIN_VALUE}"))
+          newReader.options(Map("fetchsize" -> s"${Integer.MIN_VALUE}"))
       }
 
       url = url.map(x => if (x.contains("autoReconnect")) x else s"$x&autoReconnect=true")
@@ -87,10 +103,14 @@ class MLSQLJDBC(override val uid: String) extends MLSQLSource with MLSQLSink wit
       val prePtn = config.config.get("prePtnArray").get
         .split(config.config.getOrElse("prePtnDelimiter" ,","))
 
-      reader.jdbc(url.get, dbTable, prePtn, new Properties())
+      newReader.jdbc(url.get, dbTable, prePtn, new Properties())
     }else{
-      reader.option("dbtable", dbTable)
-      reader.format(format).load()
+      newReader.option("dbtable", dbTable)
+      var f: String = format
+      if (isAdaptor && "jdbc".equals(format)) {
+        f = "org.apache.spark.sql.execution.datasources.jdbc.JdbcRelationProviderAdaptor"
+      }
+      newReader.format(f).load()
     }
 
     val columns = table.columns
@@ -218,14 +238,33 @@ class MLSQLJDBC(override val uid: String) extends MLSQLSource with MLSQLSink wit
         writer.options(options)
       })
     }
+
     writer.mode(config.mode)
     //load configs should overwrite connect configs
     writer.options(config.config)
     config.config.get("partitionByCol").map { item =>
       writer.partitionBy(item.split(","): _*)
     }
-
+    writer.option("dbtable", dbtable)
+    import org.apache.spark.sql.jdbc.DataFrameWriterExtensions._
+    val extraOptions = ScalaReflect.fromInstance[DataFrameWriter[Row]](writer)
+      .method("extraOptions").invoke()
+      .asInstanceOf[{def toMap[T, U](implicit ev: _ <:< (T, U)): scala.collection.immutable.Map[T, U]}]
+    val jdbcOptions = new JDBCOptions(extraOptions.toMap[String,String] + ("dbtable" -> dbtable))
     config.config.get("idCol").map { item =>
+      writer.upsert(Option(item), jdbcOptions, config.df.get)
+    }.getOrElse {
+      //      别删除,这是老的调用方式
+      //      writer.option("dbtable", dbtable)
+      //      writer.format(format).save(dbtable)
+      val url = jdbcOptions.url
+      if (jdbcOptions.asConnectionProperties.getProperty("db_type").equals("Vertica")) {
+        writer.save_csv(format, jdbcOptions, config.mode, config.df.get)
+      } else {
+        writer.save_(format, jdbcOptions, config.mode)
+      }
+    }
+    /*config.config.get("idCol").map { item =>
       import org.apache.spark.sql.jdbc.DataFrameWriterExtensions._
       val extraOptions = ScalaReflect.fromInstance[DataFrameWriter[Row]](writer)
         .method("extraOptions").invoke()
@@ -235,7 +274,7 @@ class MLSQLJDBC(override val uid: String) extends MLSQLSource with MLSQLSink wit
     }.getOrElse {
       writer.option("dbtable", dbtable)
       writer.format(format).save(dbtable)
-    }
+    }*/
   }
 
   override def register(): Unit = {

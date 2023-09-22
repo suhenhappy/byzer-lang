@@ -21,6 +21,9 @@ import tech.mlsql.dsl.auth.DatasourceAuth
 import tech.mlsql.sql.{MLSQLSQLParser, MLSQLSparkConf}
 
 import scala.collection.JavaConverters._
+import org.apache.spark.sql.catalyst.util.CaseInsensitiveMap
+import org.apache.spark.sql.execution.datasources.jdbc.{ReflectHelper}
+import org.apache.spark.sql.{DataFrame, DataFrameReader, DataFrameReaderFactory, DataFrameWriter, Row, SparkSession}
 
 /**
  * 2018-12-21 WilliamZhu(allwefantasy@gmail.com)
@@ -86,8 +89,32 @@ class MLSQLDirectJDBC extends MLSQLDirectSource with MLSQLDirectSink with MLSQLS
     }
 
     val dbtable = "(" + config.config("directQuery") + ") temp"
+    var newReader: DataFrameReader = reader
+    var isAdaptor: Boolean = false
+    val readerOptions: CaseInsensitiveMap[String] = ReflectHelper.reflectValue(reader, "extraOptions")
+    val jdbcOptions = readerOptions.toMap
+    if ("true".equals(jdbcOptions.getOrElse("support_mv", "false"))) {
+      val ss: SparkSession = ReflectHelper.reflectValue(reader, "sparkSession")
+      val readerAdaptor = DataFrameReaderFactory.create(ss)
+      readerAdaptor.options(readerOptions.toMap)
+      newReader = readerAdaptor
+      isAdaptor = true
+    }
 
-    if (config.config.contains("prePtnArray")) {
+    if (config.config.contains("prePtnArray")){
+      val prePtn = config.config.get("prePtnArray").get
+        .split(config.config.getOrElse("prePtnDelimiter" ,","))
+
+      newReader.jdbc(url.get, dbtable, prePtn, new Properties())
+    }else{
+      newReader.option("dbtable", dbtable)
+      var f: String = format
+      if (isAdaptor && "jdbc".equals(format)) {
+        f = "org.apache.spark.sql.execution.datasources.jdbc.JdbcRelationProviderAdaptor"
+      }
+      newReader.format(f).load()
+    }
+    /*if (config.config.contains("prePtnArray")) {
       val prePtn = config.config.get("prePtnArray").get
         .split(config.config.getOrElse("prePtnDelimiter", ","))
 
@@ -96,7 +123,7 @@ class MLSQLDirectJDBC extends MLSQLDirectSource with MLSQLDirectSink with MLSQLS
       reader.option("dbtable", dbtable)
 
       reader.format(format).load()
-    }
+    }*/
   }
 
   override def save(writer: DataFrameWriter[Row], config: DataSinkConfig): Unit = {

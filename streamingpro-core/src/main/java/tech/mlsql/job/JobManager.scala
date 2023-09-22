@@ -15,6 +15,10 @@ import tech.mlsql.runtime.plugins.request_cleaner.RequestCleanerManager
 import scala.collection.JavaConversions._
 import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
+import cn.hutool.core.util.IdUtil
+import tech.mlsql.job.JobListener.{JobFinishedEvent, JobFinishedStatusEvent, JobStartedEvent}
+import tech.mlsql.job.listeners.{CleanCacheListener, EngineMDCLogListener, TaskIdentifyListener}
+
 
 /**
  * 2019-04-07 WilliamZhu(allwefantasy@gmail.com)
@@ -23,6 +27,7 @@ object JobManager extends Logging {
   private[this] var _jobManager: JobManager = _
   private[this] val _executor = Executors.newFixedThreadPool(100)
   private[this] val _jobListeners = ArrayBuffer[JobListener]()
+  private[this] val _jobStatusListeners = ArrayBuffer[JobStatusListener]()
 
   def addJobListener(listener: JobListener) = {
     _jobListeners += listener
@@ -40,13 +45,22 @@ object JobManager extends Logging {
     _jobListeners.clear()
   }
 
-  def init(spark: SparkSession, initialDelay: Long = 30, checkTimeInterval: Long = 5) = {
+  def successStatus(groupId: String, transId: String): Unit = {
+    //    _jobStatusListeners.foreach { f => f.onJobRunning(new JobFinishedStatusEvent(groupId,transId, "SUCCESS"))}
+  }
+
+  def errorStatus(groupId: String, transId: String): Unit = {
+    //    _jobStatusListeners.foreach { f => f.onJobRunning(new JobFinishedStatusEvent(groupId,transId, "ERROR"))}
+  }
+
+  def init(spark: SparkSession, initialDelay: Long = 30, checkTimeInterval: Long = 5): Any = {
     synchronized {
       if (_jobManager == null) {
         logInfo(s"JobManager started with initialDelay=${initialDelay} checkTimeInterval=${checkTimeInterval}")
         _jobManager = new JobManager(spark, initialDelay, checkTimeInterval)
         _jobListeners += new CleanCacheListener
         _jobListeners += new EngineMDCLogListener
+        _jobStatusListeners += new TaskIdentifyListener
         _jobManager.run
       }
     }
@@ -89,9 +103,11 @@ object JobManager extends Logging {
         ScriptSQLExec.setContext(context)
         try {
           JobManager.run(session, job, f)
-          context.execListener.addEnv("__MarkAsyncRunFinish__","true")
+          JobManager.successStatus(job.groupId, job.transId)
+          context.execListener.addEnv("__MarkAsyncRunFinish__", "true")
         } catch {
           case e: Exception =>
+            JobManager.errorStatus(job.groupId, job.transId)
             logInfo("Async Job Exception", e)
         } finally {
           RequestCleanerManager.call()
@@ -108,10 +124,23 @@ object JobManager extends Logging {
                  jobType: String,
                  jobName: String,
                  jobContent: String,
-                 timeout: Long): MLSQLJobInfo = {
+                 timeout: Long,
+                 jobId: String,
+                 transId: String): MLSQLJobInfo = {
     val startTime = System.currentTimeMillis()
-    val groupId = _jobManager.nextGroupId
-    MLSQLJobInfo(owner, jobType, jobName, jobContent, groupId, new MLSQLJobProgress(0, 0), startTime, timeout)
+    var groupId = ""
+    var transNId = ""
+    if (jobId == null) { //如果参数没传过来，则自己生成id
+      groupId = _jobManager.nextGroupId;
+    } else {
+      groupId = jobId
+    }
+    if (transId == null) {
+      transNId = IdUtil.simpleUUID();
+    } else {
+      transNId = transId
+    }
+    MLSQLJobInfo(owner, jobType, jobName, jobContent, groupId, transNId, new MLSQLJobProgress(0, 0), startTime, timeout)
   }
 
   def getJobInfo: Map[String, MLSQLJobInfo] =
@@ -139,7 +168,7 @@ class JobManager(_spark: SparkSession, initialDelay: Long, checkTimeInterval: Lo
   val groupIdToMLSQLJobInfo = new ConcurrentHashMap[String, MLSQLJobInfo]()
 
 
-  def nextGroupId = UUID.randomUUID().toString
+  def nextGroupId = UUID.randomUUID().toString.replaceAll("-", "")
 
   val executor = Executors.newSingleThreadScheduledExecutor()
 
@@ -228,7 +257,12 @@ class DefaultMLSQLJobProgressListener extends MLSQLJobProgressListener with Logg
   override def before(name: String, sql: String): Unit = {
     counter += 1
     val context = ScriptSQLExec.contextGetOrForTest()
-    val job = JobManager.getJobInfo.filter(f => f._1 == context.groupId).head._2
+    val stringToInfo = JobManager.getJobInfo.filter(f => f._1 == context.groupId)
+    //多线程下这边可能会出现问题，所以当JobInfo数据是空的时候直接return啥都不干
+    if (stringToInfo.size == 0) {
+      return
+    }
+    val job = stringToInfo.head._2
     // only save/insert will trigger execution
 
     def getHead(str: String) = {
@@ -278,6 +312,7 @@ case class MLSQLJobInfo(
                          jobName: String,
                          jobContent: String,
                          groupId: String,
+                         transId: String,
                          progress: MLSQLJobProgress,
                          startTime: Long,
                          timeout: Long

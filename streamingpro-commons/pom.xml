@@ -28,6 +28,11 @@
     <artifactId>streamingpro-common-${spark.bigversion}_${scala.binary.version}</artifactId>
     <dependencies>
         <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-dbcp2</artifactId>
+            <version>2.7.0</version>
+        </dependency>
+        <dependency>
             <groupId>org.apache.hadoop</groupId>
             <artifactId>hadoop-client</artifactId>
             <version>${hadoop-client-version}</version>

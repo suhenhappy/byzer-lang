@@ -57,18 +57,32 @@ echo
 echo
 echo
 sleep 5
-
+export PATH=/usr/local/python3/bin/:$PATH
 $SPARK_HOME/bin/spark-submit --class streaming.core.StreamingApp \
         --driver-memory ${DRIVER_MEMORY} \
         --jars ${JARS} \
-        --master local[*] \
+        --master yarn \
+        --deploy-mode client\
         --name byzer-lang \
+         --num-executors 2 \
+        --executor-cores 4 \
+        --executor-memory 6g \
+        --driver-memory 2g \
         --conf "spark.sql.hive.thriftServer.singleSession=true" \
         --conf "spark.kryoserializer.buffer=256k" \
         --conf "spark.kryoserializer.buffer.max=1024m" \
         --conf "spark.serializer=org.apache.spark.serializer.KryoSerializer" \
         --conf "spark.scheduler.mode=FAIR" \
         --conf "spark.driver.extraClassPath=${EXT_JARS}" \
+         --conf "spark.sql.adaptive.enabled=true" \
+          --conf "spark.yarn.am.memory=2g" \
+        --conf "spark.yarn.am.cores=2" \
+        --conf "spark.executor.memory=20g" \
+        --conf "spark.executor.cores=6" \
+        --conf "spark.executor.instances=4" \
+        --conf "spark.my.hdfs.address=hdfs://192.168.125.4:9000" \
+        --conf "spark.my.hdfs.user=hdfs" \
+        --conf "spark.my.hdfs.baseDir=/test/driver" \
         $MAIN_JAR_PATH \
         -streaming.name byzer-lang    \
         -streaming.platform spark   \
@@ -76,4 +90,13 @@ $SPARK_HOME/bin/spark-submit --class streaming.core.StreamingApp \
         -streaming.driver.port 9003   \
         -streaming.spark.service true \
         -streaming.thrift false \
-        -streaming.enableHiveSupport true
+        -streaming.enableHiveSupport false \
+        -plugin.ChartsPlugin com.code.mlsql.charts.ChartsPlugin \
+        -plugin.GPStorage com.code.mlsql.distrdb.GreenplumStorage \
+        -plugin.Zipper com.code.mlsql.zipper.Zipper \
+        -plugin.Peer com.code.mlsql.peers.Peer \
+        -plugin.HiveStorage com.code.mlsql.hive.HiveStorage \
+        -streaming.udf.clzznames com.code.udf.MyFunctions \
+        -streaming.plugin.clzznames tech.mlsql.plugins.ds.MLSQLExcelApp \
+        -Djava.awt.headless=true \
+        --packages org.apache.spark:spark-sql-kafka-0-10_2.12-3.0.1

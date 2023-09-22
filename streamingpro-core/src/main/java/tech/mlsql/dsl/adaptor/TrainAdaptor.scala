@@ -30,7 +30,7 @@ import tech.mlsql.dsl.auth.ETAuth
 import tech.mlsql.dsl.auth.dsl.mmlib.ETMethod
 import tech.mlsql.ets.register.ETRegister
 import tech.mlsql.tool.Templates2
-
+import scala.collection.mutable
 /**
  * Created by allwefantasy on 12/1/2018.
  */
@@ -133,7 +133,7 @@ class TrainAdaptor(scriptSQLExecListener: ScriptSQLExecListener) extends DslAdap
 object MLMapping extends Logging with WowLog {
   private val mappingCache = new java.util.concurrent.ConcurrentHashMap[String, SQLAlg]()
 
-  private val mapping = Map[String, String](
+  val mapping = mutable.Map[String, String](
     "NaiveBayes" -> "streaming.dsl.mmlib.algs.SQLNaiveBayes",
     "RandomForest" -> "streaming.dsl.mmlib.algs.SQLRandomForest",
     "GBTRegressor" -> "streaming.dsl.mmlib.algs.SQLGBTRegressor",
@@ -292,7 +292,8 @@ object MLMapping extends Logging with WowLog {
   }
 
   private def getRegisteredMapping: Map[String, String] = {
-    MLMapping.mapping ++ ETRegister.getMapping
+    val map = MLMapping.mapping ++ ETRegister.getMapping
+    map.toMap
   }
 }
 

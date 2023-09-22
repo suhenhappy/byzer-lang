@@ -56,7 +56,7 @@ class MLSQLCompositor[T] extends Compositor[T] with CompositorHelper {
 
     val jobInfo = JobManager.getJobInfo(
       "admin", MLSQLJobType.SCRIPT, "", _sql,
-      -1L
+      -1L,"",""
     )
     JobManager.run(sparkSession(params), jobInfo, () => {
       val context = new ScriptSQLExecListener(sparkSession(params), "", Map())

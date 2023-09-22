@@ -23,7 +23,7 @@ object ScriptRunner extends Logging {
   def runSubJobAsync(code: String, fetchResult: (DataFrame) => Unit, spark: Option[SparkSession], reuseContext: Boolean, reuseExecListenerEnv: Boolean) = {
     val context = ScriptSQLExec.contextGetOrForTest()
     val finalSpark = spark.getOrElse(context.execListener.sparkSession)
-    val jobInfo = JobManager.getJobInfo(context.owner, MLSQLJobType.SCRIPT, context.groupId, code, -1l)
+    val jobInfo = JobManager.getJobInfo(context.owner, MLSQLJobType.SCRIPT, context.groupId, code, -1l,"","")
     jobInfo.copy(jobName = jobInfo.jobName + ":" + jobInfo.groupId)
     val future = executors.submit(new Callable[Option[DataFrame]] {
       override def call(): Option[DataFrame] = {
@@ -80,7 +80,7 @@ object ScriptRunner extends Logging {
     val context = ScriptSQLExec.contextGetOrForTest()
     val finalSpark = spark.getOrElse(context.execListener.sparkSession)
 
-    val jobInfo = JobManager.getJobInfo(context.owner, MLSQLJobType.SCRIPT, context.groupId, code, -1l)
+    val jobInfo = JobManager.getJobInfo(context.owner, MLSQLJobType.SCRIPT, context.groupId, code, -1l,"","")
     jobInfo.copy(jobName = jobInfo.jobName + ":" + jobInfo.groupId)
     _run(code, context, jobInfo, finalSpark, fetchResult, reuseContext, reuseExecListenerEnv)
     context.execListener.getLastSelectTable() match {

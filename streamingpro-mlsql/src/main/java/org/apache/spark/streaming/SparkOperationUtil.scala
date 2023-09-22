@@ -3,6 +3,8 @@ package org.apache.spark.streaming
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
+
+import cn.hutool.core.util.IdUtil
 import net.csdn.common.reflect.ReflectHelper
 import org.apache.commons.io.FileUtils
 import org.apache.spark.sql.{DataFrame, Row}
@@ -69,7 +71,9 @@ trait SparkOperationUtil {
   def createJobInfoFromExistGroupId(code: String) = {
     val context = ScriptSQLExec.context()
     val startTime = System.currentTimeMillis()
-    MLSQLJobInfo(context.owner, MLSQLJobType.SCRIPT, UUID.randomUUID().toString, code, context.groupId, new MLSQLJobProgress(0, 0), startTime, -1)
+
+    val  transNId = IdUtil.simpleUUID();
+    MLSQLJobInfo(context.owner, MLSQLJobType.SCRIPT, UUID.randomUUID().toString, code, context.groupId, transNId,new MLSQLJobProgress(0, 0), startTime, -1)
   }
 
   def executeCodeWithGroupId(runtime: SparkRuntime, groupId: AtomicReference[String], code: String) = {

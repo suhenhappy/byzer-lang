@@ -208,6 +208,7 @@ class SparkRuntime(_params: JMap[Any, Any]) extends StreamingRuntime with Platfo
         registerUDF(clzz)
       }
     }
+    ConfigReader.init()
     MLSQLStreamManager.start(sparkSession)
     createTables
   }
