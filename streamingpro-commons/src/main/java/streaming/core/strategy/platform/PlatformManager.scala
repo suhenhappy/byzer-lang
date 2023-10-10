@@ -19,8 +19,10 @@
 package streaming.core.strategy.platform
 
 import java.util
+import java.util.concurrent.Future
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicReference}
 import java.util.{Map => JMap}
+
 
 import net.csdn.ServiceFramwork
 import net.csdn.bootstrap.Application
@@ -204,7 +206,16 @@ class PlatformManager extends Logging{
       runtime.startRuntime
     }
     PlatformManager.RUNTIME_IS_READY.compareAndSet(false, true)
+
+   // if (params.hasParam("streamingMethod.execute.afterStart")) {//引擎启动后执行方法
+   val clazz = Class.forName("com.code.udf.dynamic.DynamicUdf")                            //构造一个需要反射类的对象
+    clazz                                                                 //使用该对象去获取私有函数
+      .getDeclaredMethod("run")     //并得到该函数入参的数据类型,如有多个入参,要声明多个classOf
+
+      .invoke(clazz.newInstance())                           //激活该函数,传入入参
+   // }
     if (params.getBooleanParam("streaming.unitest.awaitTermination", true)) {
+      System.out.println("==========sss=======")
       runtime.awaitTermination
     }
   }

@@ -1,5 +1,6 @@
 package org.apache.spark.sql.execution.datasources.jdbc
 
+import java.security.PrivilegedAction
 import java.sql.{Connection, Driver, DriverManager, JDBCType, PreparedStatement, ResultSet, ResultSetMetaData, SQLException}
 import java.util.Locale
 
@@ -14,6 +15,7 @@ import org.apache.spark.sql.catalyst.encoders.RowEncoder
 import org.apache.spark.sql.catalyst.expressions.SpecificInternalRow
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
 import org.apache.spark.sql.catalyst.util.{CaseInsensitiveMap, DateTimeUtils, GenericArrayData}
+import org.apache.spark.sql.execution.datasources.jdbc.security.TxHiveAuthUtil
 import org.apache.spark.sql.jdbc.{JdbcDialect, JdbcDialects, JdbcType}
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.util.SchemaUtils
@@ -25,6 +27,7 @@ import org.apache.spark.{SparkEnv, TaskContext}
 import scala.collection.JavaConverters._
 import scala.util.Try
 import scala.util.control.NonFatal
+
 /**
  * @author Pan Jiebin
  */
@@ -85,6 +88,14 @@ object JdbcHelper extends Logging {
         }
       }
 
+     /* var connection: Connection = null;
+      TxHiveAuthUtil.login("").doAs(new PrivilegedAction[Unit]() {
+        override def run(): Unit = {
+          // 在这里执行需要以 "user1" 身份运行的代码
+          println("Code is running under user1's identity!")
+          connection = driver.connect(options.url, options.asConnectionProperties);
+        }
+      });*/
       val connection: Connection = driver.connect(options.url, options.asConnectionProperties)
       require(connection != null,
         s"The driver could not open a JDBC connection. Check the URL: ${options.url}")
@@ -338,8 +349,8 @@ object JdbcHelper extends Logging {
         } catch {
           // Workaround for HIVE-14684:
           case e: SQLException if
-            e.getMessage == "Method not supported" &&
-              rsmd.getClass.getName == "org.apache.hive.jdbc.HiveResultSetMetaData" => true
+          e.getMessage == "Method not supported" &&
+            rsmd.getClass.getName == "org.apache.hive.jdbc.HiveResultSetMetaData" => true
         }
       }
       val nullable = if (alwaysNullable) {

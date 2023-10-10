@@ -91,6 +91,10 @@ class RestController extends ApplicationController with WowLog with Logging {
 
   }
 
+  def start():Unit={
+
+  }
+
   // mlsql script execute api, support async and sync
   // begin -------------------------------------------
 
@@ -266,6 +270,23 @@ class RestController extends ApplicationController with WowLog with Logging {
       cleanActiveSessionInSpark
     }
     render(outputResult)
+  }
+
+  def script(sql:String):Unit={
+    val jobInfo = JobManager.getJobInfo(
+      "admin", MLSQLJobType.SCRIPT, "sdfsds", sql,
+      1696902783414L, "",""
+    )
+    val context = createScriptSQLExecListener(getSession, jobInfo.groupId)
+
+    JobManager.run(getSession, jobInfo, () => {
+      ScriptSQLExec.parse(param("sql"), context,
+        skipInclude = paramAsBoolean("skipInclude", false),
+        skipAuth = paramAsBoolean("skipAuth", true),
+        skipPhysicalJob = paramAsBoolean("skipPhysicalJob", false),
+        skipGrammarValidate = paramAsBoolean("skipGrammarValidate", true)
+      )
+    })
   }
 
   private def getLogUIUrl(jobId: String): String = {

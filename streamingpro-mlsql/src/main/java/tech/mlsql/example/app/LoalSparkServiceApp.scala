@@ -10,7 +10,7 @@ object LocalSparkServiceApp {
   def main(args: Array[String]): Unit = {
     StreamingApp.main(Array(
       "-streaming.master", "local[*]",
-      "-streaming.name", "Mlsql-desktop",
+      "-streaming.name", "julong",
       "-streaming.rest", "true",
       "-streaming.thrift", "false",
       "-streaming.platform", "spark",
